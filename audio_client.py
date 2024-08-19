@@ -1,7 +1,6 @@
 import socket
 import pickle
 import sys
-import time
 import pyaudio
 
 class AudioClient:
@@ -13,51 +12,54 @@ class AudioClient:
         self.broker_port = broker_port
         self.chunk_size = 1024
         self.audio_format = pyaudio.paInt16
-        self.channels = 2
-        self.rate = 48000
+        self.socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
     def publish_to_broker(self):
         message = {'command': 'PUBLISH', 'topic': self.genre, 'data': {'genre': self.genre, 'addr': (self.my_host, self.my_port)}}
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect((self.broker_host, self.broker_port))
+        with self.socket_client as client:
             client.send(pickle.dumps(message))
             confirmation = pickle.loads(client.recv(1024))
             if confirmation == 'PUBLISH_CONFIRMATION_ACK':
                 print(f"Requested streaming of {self.genre} to {self.my_host}:{self.my_port}")
 
     def receive_stream(self):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_socket:
-                udp_socket.bind((self.my_host, self.my_port))
-                print(f"Listening for {self.genre} stream on {self.my_host}:{self.my_port}")
-                p = pyaudio.PyAudio()
-                stream = p.open(format=self.audio_format, channels=self.channels, rate=self.rate, output=True, frames_per_buffer=self.chunk_size)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_socket:
+            udp_socket.bind((self.my_host, self.my_port))
+            print(f"Listening for {self.genre} stream on {self.my_host}:{self.my_port}")
 
+            p = pyaudio.PyAudio()
+
+            stream = p.open(format=self.audio_format, channels=2, rate=48000, output=True, frames_per_buffer=self.chunk_size)
+
+            while True:
                 try:
-                    while True:
-                        data, addr = udp_socket.recvfrom(1024)
-                        max_packet_size = 4096
-                        stream.write(data)
-
-
-                        if not data:
-                            break
+                    data, addr = udp_socket.recvfrom(1024)
+                    if not data:
+                        break
+                    stream.write(data)
                 except KeyboardInterrupt:
                     print("System interrupted by user")
-                except Exception as e:
-                    print(e)
-                finally:
                     stream.stop_stream()
-                    stream.close
+                    stream.close()
                     p.terminate()
-
-        except Exception as e:
-            print(e)
-            time.sleep(5)
+                    self.quit()
+                    break
 
     def start(self):
+        self.socket_client.connect((self.broker_host, self.broker_port))
         self.publish_to_broker()
         self.receive_stream()
+
+    def quit(self):
+        print('quit')
+        message = {'command': 'QUIT', 'topic': self.genre, 'data': {'genre': self.genre, 'addr': (self.my_host, self.my_port)}}
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            client.connect((self.broker_host, self.broker_port))
+            client.send(pickle.dumps(message))
+            confirmation = pickle.loads(client.recv(1024))
+            if confirmation == 'QUIT_CONFIRMATION_ACK':
+                print(f"Requested quiting") 
+                self.socket_client.close()
 
 if __name__ == '__main__':
     if len(sys.argv) != 5 or sys.argv[1] != '-t' or sys.argv[3] != '-m':
